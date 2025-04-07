@@ -1,0 +1,67 @@
+import os
+import cv2
+import face_recognition
+import numpy as np
+from PyQt5.QtCore import QThread, pyqtSignal, pyqtSlot
+from reporting.database import ExamDatabase
+
+class FaceAuthenticator(QThread):
+    frame_ready = pyqtSignal(np.ndarray)
+    auth_result = pyqtSignal(bool, str)
+    
+    def __init__(self):
+        super().__init__()
+        self.running = False
+        self.db = ExamDatabase()
+        self.load_known_faces()
+        
+    def load_known_faces(self):
+        """Load known faces from database"""
+        self.known_face_encodings = []
+        self.known_face_ids = []
+        
+        students = self.db.get_all_students()
+        for student in students:
+            if student['face_encoding']:
+                encoding = np.array(student['face_encoding'])
+                self.known_face_encodings.append(encoding)
+                self.known_face_ids.append(student['id'])
+    
+    def run(self):
+        self.running = True
+        video_capture = cv2.VideoCapture(0)
+        
+        while self.running:
+            ret, frame = video_capture.read()
+            if not ret:
+                continue
+                
+            # Convert to RGB (face_recognition uses RGB)
+            rgb_frame = frame[:, :, ::-1]
+            
+            # Find all face locations and encodings
+            face_locations = face_recognition.face_locations(rgb_frame)
+            face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+            
+            # Draw rectangles around faces
+            for (top, right, bottom, left) in face_locations:
+                cv2.rectangle(frame, (left, top), (right, bottom), (0, 0, 255), 2)
+            
+            # Try to recognize faces
+            for face_encoding in face_encodings:
+                matches = face_recognition.compare_faces(self.known_face_encodings, face_encoding)
+                if True in matches:
+                    first_match_index = matches.index(True)
+                    user_id = self.known_face_ids[first_match_index]
+                    self.auth_result.emit(True, user_id)
+                else:
+                    self.auth_result.emit(False, "")
+            
+            # Emit frame for display
+            self.frame_ready.emit(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            
+        video_capture.release()
+        
+    def stop(self):
+        self.running = False
+        self.wait()
